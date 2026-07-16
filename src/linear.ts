@@ -10,7 +10,7 @@ const issueFields = `
   state { name }
   assignee { id }
   labels { nodes { name } }
-  blockedBy { nodes { id identifier state { name } } }
+  blockedBy { nodes { id identifier createdAt updatedAt state { name } } }
 `;
 
 function normalize(raw: Record<string, unknown>): Issue {
@@ -23,6 +23,8 @@ function normalize(raw: Record<string, unknown>): Issue {
     id: blocker.id ? String(blocker.id) : null,
     identifier: blocker.identifier ? String(blocker.identifier) : null,
     state: stateName(blocker.state) || null,
+    createdAt: blocker.createdAt ? String(blocker.createdAt) : null,
+    updatedAt: blocker.updatedAt ? String(blocker.updatedAt) : null,
   }));
   return {
     id: String(raw.id ?? ""),

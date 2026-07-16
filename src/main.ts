@@ -28,7 +28,7 @@ const orchestrator = new Orchestrator(
       return new LinearClient(workflow.serviceConfig.tracker).fetchTerminalIssues(states);
     },
   },
-  new DefaultAgentRunner(),
+  new DefaultAgentRunner(logger),
   async () => {
     const workflow = await source.get();
     bindWorkflowPrompt(workflow.serviceConfig, workflow.promptTemplate);

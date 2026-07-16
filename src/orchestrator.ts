@@ -12,6 +12,17 @@ interface RunningEntry {
   attempt: number | null;
   startedAt: number;
   lastEventAt: number | null;
+  sessionId: string | null;
+  threadId: string | null;
+  turnId: string | null;
+  codexAppServerPid: number | null;
+  lastCodexEvent: string | null;
+  lastCodexTimestamp: string | null;
+  lastCodexMessage: string | null;
+  turnCount: number;
+  lastReportedInputTokens: number;
+  lastReportedOutputTokens: number;
+  lastReportedTotalTokens: number;
   controller: AbortController;
   cancellation: "terminal" | "inactive" | "stalled" | null;
   completion: Promise<void>;
@@ -21,15 +32,31 @@ interface RetryEntry {
   issueId: string;
   identifier: string;
   attempt: number;
+  dueAtMs: number;
   timer: NodeJS.Timeout;
   error: string | null;
+  issue: Issue;
 }
 
 export interface RuntimeSnapshot {
-  running: Array<{ issueId: string; identifier: string; state: string; sessionAgeMs: number }>;
+  running: Array<{
+    issueId: string;
+    identifier: string;
+    state: string;
+    sessionAgeMs: number;
+    sessionId: string | null;
+    threadId: string | null;
+    turnId: string | null;
+    codexAppServerPid: number | null;
+    lastCodexEvent: string | null;
+    lastCodexTimestamp: string | null;
+    lastCodexMessage: string | null;
+    turnCount: number;
+  }>;
   claimed: string[];
-  retries: Array<{ issueId: string; identifier: string; attempt: number; error: string | null }>;
+  retries: Array<{ issueId: string; identifier: string; attempt: number; dueAtMs: number; error: string | null }>;
   totals: { inputTokens: number; outputTokens: number; totalTokens: number; runtimeMs: number };
+  rateLimits: unknown;
 }
 
 const normalized = (value: string) => value.trim().toLowerCase();
@@ -43,6 +70,7 @@ export class Orchestrator {
   private readonly claimed = new Set<string>();
   private readonly retries = new Map<string, RetryEntry>();
   private totals = { inputTokens: 0, outputTokens: 0, totalTokens: 0, runtimeMs: 0 };
+  private rateLimits: unknown = null;
 
   constructor(
     private readonly tracker: IssueTracker,
@@ -74,10 +102,30 @@ export class Orchestrator {
   snapshot(): RuntimeSnapshot {
     const now = Date.now();
     return {
-      running: [...this.running.entries()].map(([issueId, entry]) => ({ issueId, identifier: entry.issue.identifier, state: entry.issue.state, sessionAgeMs: now - entry.startedAt })),
+      running: [...this.running.entries()].map(([issueId, entry]) => ({
+        issueId,
+        identifier: entry.issue.identifier,
+        state: entry.issue.state,
+        sessionAgeMs: now - entry.startedAt,
+        sessionId: entry.sessionId,
+        threadId: entry.threadId,
+        turnId: entry.turnId,
+        codexAppServerPid: entry.codexAppServerPid,
+        lastCodexEvent: entry.lastCodexEvent,
+        lastCodexTimestamp: entry.lastCodexTimestamp,
+        lastCodexMessage: entry.lastCodexMessage,
+        turnCount: entry.turnCount,
+      })),
       claimed: [...this.claimed],
-      retries: [...this.retries.values()].map((retry) => ({ issueId: retry.issueId, identifier: retry.identifier, attempt: retry.attempt, error: retry.error })),
+      retries: [...this.retries.values()].map((retry) => ({
+        issueId: retry.issueId,
+        identifier: retry.identifier,
+        attempt: retry.attempt,
+        dueAtMs: retry.dueAtMs,
+        error: retry.error,
+      })),
       totals: { ...this.totals },
+      rateLimits: this.rateLimits,
     };
   }
 
@@ -188,6 +236,17 @@ export class Orchestrator {
       attempt,
       startedAt: Date.now(),
       lastEventAt: null,
+      sessionId: null,
+      threadId: null,
+      turnId: null,
+      codexAppServerPid: null,
+      lastCodexEvent: null,
+      lastCodexTimestamp: null,
+      lastCodexMessage: null,
+      turnCount: 0,
+      lastReportedInputTokens: 0,
+      lastReportedOutputTokens: 0,
+      lastReportedTotalTokens: 0,
       controller,
       cancellation: null,
       completion: Promise.resolve(),
@@ -211,10 +270,24 @@ export class Orchestrator {
   }
 
   private observe(issue: Issue, entry: RunningEntry, update: SessionUpdate): void {
-    entry.lastEventAt = Date.now();
-    this.totals.inputTokens += update.usage?.inputTokens ?? 0;
-    this.totals.outputTokens += update.usage?.outputTokens ?? 0;
-    this.totals.totalTokens += update.usage?.totalTokens ?? 0;
+    entry.lastEventAt = Number.isFinite(Date.parse(update.timestamp)) ? Date.parse(update.timestamp) : Date.now();
+    entry.sessionId = update.sessionId ?? entry.sessionId;
+    entry.threadId = update.threadId ?? entry.threadId;
+    entry.turnId = update.turnId ?? entry.turnId;
+    entry.codexAppServerPid = update.codexAppServerPid ?? entry.codexAppServerPid;
+    entry.lastCodexEvent = update.event;
+    entry.lastCodexTimestamp = update.timestamp;
+    entry.lastCodexMessage = update.message ?? entry.lastCodexMessage;
+    if (update.event === "session_started") entry.turnCount += 1;
+    if (update.rateLimits !== undefined) this.rateLimits = update.rateLimits;
+    if (update.usage) {
+      this.totals.inputTokens += tokenDelta(update.usage.inputTokens, entry.lastReportedInputTokens);
+      this.totals.outputTokens += tokenDelta(update.usage.outputTokens, entry.lastReportedOutputTokens);
+      this.totals.totalTokens += tokenDelta(update.usage.totalTokens, entry.lastReportedTotalTokens);
+      entry.lastReportedInputTokens = Math.max(entry.lastReportedInputTokens, update.usage.inputTokens ?? 0);
+      entry.lastReportedOutputTokens = Math.max(entry.lastReportedOutputTokens, update.usage.outputTokens ?? 0);
+      entry.lastReportedTotalTokens = Math.max(entry.lastReportedTotalTokens, update.usage.totalTokens ?? 0);
+    }
     this.logger.log("info", "codex_update", {
       issue_id: issue.id,
       issue_identifier: issue.identifier,
@@ -245,7 +318,15 @@ export class Orchestrator {
     const existing = this.retries.get(issue.id);
     if (existing) clearTimeout(existing.timer);
     const timer = setTimeout(() => void this.runRetry(issue.id, config), delay);
-    this.retries.set(issue.id, { issueId: issue.id, identifier: issue.identifier, attempt, error, timer });
+    this.retries.set(issue.id, {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      attempt,
+      dueAtMs: Date.now() + delay,
+      error,
+      issue,
+      timer,
+    });
     this.logger.log("info", "retry_queued", { issue_id: issue.id, issue_identifier: issue.identifier, attempt, delay_ms: delay, error });
   }
 
@@ -260,13 +341,14 @@ export class Orchestrator {
       config = workflow.serviceConfig;
     } catch (error) {
       this.logger.log("error", "workflow_validation_failed", { error: String(error) });
+      this.queueRetry(retry.issue, retry.attempt, "workflow validation failed", 10000, configAtQueue);
       return;
     }
     let candidates: Issue[];
     try {
       candidates = await this.tracker.fetchCandidates(config.tracker.activeStates);
     } catch (error) {
-      this.queueRetry({ id: issueId, identifier: retry.identifier, title: retry.identifier, description: null, priority: null, state: "", branchName: null, url: null, labels: [], blockedBy: [], createdAt: null, updatedAt: null, assigneeId: null }, retry.attempt, String(error), 10000, config);
+      this.queueRetry(retry.issue, retry.attempt, String(error), 10000, config);
       return;
     }
     const issue = candidates.find((candidate) => candidate.id === issueId);
@@ -282,6 +364,10 @@ export class Orchestrator {
     if (!workflow) return;
     this.dispatch(issue, retry.attempt, workflow);
   }
+}
+
+function tokenDelta(current: number | undefined, previous: number): number {
+  return typeof current === "number" && Number.isFinite(current) ? Math.max(current - previous, 0) : 0;
 }
 
 function compareIssues(left: Issue, right: Issue): number {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -26,6 +26,29 @@ test("strict Liquid rendering rejects unknown variables", async () => {
   await assert.rejects(renderPrompt("{{ missing }}", { id: "1", identifier: "X-1", title: "x", description: null, priority: null, state: "Todo", branchName: null, url: null, labels: [], blockedBy: [], createdAt: null, updatedAt: null, assigneeId: null }, null));
 });
 
+test("prompt input exposes the specified snake_case issue fields", async () => {
+  const rendered = await renderPrompt(
+    "{{ issue.branch_name }}|{{ issue.created_at }}|{{ issue.blocked_by[0].created_at }}",
+    {
+      id: "1",
+      identifier: "X-1",
+      title: "x",
+      description: null,
+      priority: null,
+      state: "Todo",
+      branchName: "x-1-branch",
+      url: null,
+      labels: [],
+      blockedBy: [{ id: "blocker", identifier: "X-0", state: "Done", createdAt: "2026-01-01", updatedAt: null }],
+      createdAt: "2026-01-02",
+      updatedAt: null,
+      assigneeId: null,
+    },
+    null,
+  );
+  assert.equal(rendered, "x-1-branch|2026-01-02|2026-01-01");
+});
+
 test("workflow reload retains the last valid configuration", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "symphony-workflow-"));
   const workflowPath = path.join(directory, "WORKFLOW.md");
@@ -38,4 +61,17 @@ test("workflow reload retains the last valid configuration", async () => {
   await writeFile(workflowPath, "---\n- broken\n---\nsecond");
   assert.equal((await source.get()).promptTemplate, "first");
   assert.equal(errors.length, 1);
+});
+
+test("workflow reload retains the last valid configuration when the file disappears", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "symphony-workflow-"));
+  const workflowPath = path.join(directory, "WORKFLOW.md");
+  process.env.TEST_LINEAR_KEY = "test-token";
+  await writeFile(workflowPath, "---\ntracker:\n  kind: linear\n  api_key: $TEST_LINEAR_KEY\n  project_slug: demo\n---\nfirst");
+  const errors: Error[] = [];
+  const source = new ReloadingWorkflow(workflowPath, (error) => errors.push(error));
+  assert.equal((await source.get()).promptTemplate, "first");
+  await rm(workflowPath);
+  assert.equal((await source.get()).promptTemplate, "first");
+  assert.equal(errors[0]?.message, `cannot read ${workflowPath}`);
 });

@@ -2,6 +2,8 @@ export interface Blocker {
   id: string | null;
   identifier: string | null;
   state: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 export interface Issue {

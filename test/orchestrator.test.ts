@@ -35,6 +35,7 @@ class FakeRunner implements AgentRunner {
   async run(issue: Issue, _: number | null, __: ServiceConfig, onUpdate: (update: SessionUpdate) => void, signal: AbortSignal): Promise<RunResult> {
     this.started.push(issue.id);
     onUpdate({ event: "session_started", timestamp: new Date().toISOString(), usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } });
+    onUpdate({ event: "turn_completed", timestamp: new Date().toISOString(), usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } });
     return await new Promise<RunResult>((resolve) => {
       this.resolvers.set(issue.id, resolve);
       signal.addEventListener("abort", () => resolve({ outcome: "canceled", runtimeMs: 1 }), { once: true });
@@ -66,5 +67,24 @@ test("terminal reconciliation stops the run and removes its workspace", async ()
   await orchestrator.tick();
   assert.deepEqual(runner.cleaned, ["1"]);
   assert.deepEqual(orchestrator.snapshot().claimed, []);
+  orchestrator.stop();
+});
+
+test("usage totals use deltas from cumulative Codex updates", async () => {
+  const tracker = new FakeTracker([baseIssue("1")]);
+  const runner = new FakeRunner();
+  const orchestrator = new Orchestrator(tracker, runner, async () => workflow, new MemoryLogger());
+  await orchestrator.tick();
+  const entry = runner.resolvers.get("1");
+  assert.ok(entry);
+  // The fake runner emits 3/2/5 once. Repeated totals should not double count.
+  runner.finish("1");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(orchestrator.snapshot().totals, {
+    inputTokens: 3,
+    outputTokens: 2,
+    totalTokens: 5,
+    runtimeMs: 1,
+  });
   orchestrator.stop();
 });

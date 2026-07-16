@@ -133,7 +133,20 @@ export async function loadWorkflow(workflowPath: string): Promise<Workflow> {
 export async function renderPrompt(template: string, issue: Issue, attempt: number | null): Promise<string> {
   const engine = new Liquid({ strictVariables: true, strictFilters: true });
   try {
-    return await engine.parseAndRender(template || "You are working on an issue from Linear.", { issue, attempt });
+    return await engine.parseAndRender(template || "You are working on an issue from Linear.", {
+      issue: {
+        ...issue,
+        branch_name: issue.branchName,
+        blocked_by: issue.blockedBy.map((blocker) => ({
+          ...blocker,
+          created_at: blocker.createdAt,
+          updated_at: blocker.updatedAt,
+        })),
+        created_at: issue.createdAt,
+        updated_at: issue.updatedAt,
+      },
+      attempt,
+    });
   } catch (error) {
     throw new WorkflowError("template_render_error", error instanceof Error ? error.message : String(error));
   }
@@ -146,7 +159,15 @@ export class ReloadingWorkflow {
   constructor(readonly workflowPath: string, private readonly onReloadError: (error: Error) => void) {}
 
   async get(): Promise<Workflow> {
-    const currentMtimeMs = (await stat(this.workflowPath)).mtimeMs;
+    let currentMtimeMs: number;
+    try {
+      currentMtimeMs = (await stat(this.workflowPath)).mtimeMs;
+    } catch (error) {
+      const reloadError = new WorkflowError("missing_workflow_file", `cannot read ${this.workflowPath}`);
+      if (!this.current) throw reloadError;
+      this.onReloadError(reloadError);
+      return this.current;
+    }
     if (!this.current || currentMtimeMs !== this.knownMtimeMs) {
       try {
         const loaded = await loadWorkflow(this.workflowPath);

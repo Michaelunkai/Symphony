@@ -6,6 +6,13 @@ Symphony is a standalone TypeScript service that polls Linear, assigns each elig
 
 This implementation is intended for a trusted developer host. It executes repository-owned workspace hooks and launches the configured Codex command inside per-issue workspace directories. It does not expose a network control plane, persist API keys, or write issue state itself. Keep `WORKFLOW.md` and environment secrets under the same change-control policy as the repositories it operates.
 
+## Runtime Policy
+
+- Codex approval and sandbox settings are passed through only when declared in `WORKFLOW.md`; otherwise the installed Codex app-server decides its own defaults.
+- Hooks use `sh -lc` on POSIX hosts and `powershell.exe -NoProfile -NonInteractive -Command` on Windows. `after_run` and `before_remove` failures are logged and do not override the worker or cleanup result.
+- `tracker.assignee_id` is a documented extension: when supplied, Symphony dispatches only issues assigned to that Linear user ID.
+- Symphony has no scheduler database. On restart it rebuilds scheduling state from Linear and retains per-issue workspaces until terminal-state cleanup.
+
 ## Setup
 
 ```powershell
@@ -27,6 +34,7 @@ The service discovers `WORKFLOW.md` in its working directory by default. Use `np
 - A single-authority orchestrator with priority ordering, label/blocker eligibility, global and per-state concurrency, reconciliation, stall cancellation, continuation retries, and exponential failure backoff.
 - Local Codex app-server JSON-RPC over JSONL: `initialize`, `thread/start`, `turn/start`, streamed event forwarding, timeout handling, and in-worker continuation turns.
 - Structured JSON logs and an in-memory runtime snapshot method for an optional status surface.
+- Live-session observability with current thread/turn IDs, app-server PID, latest Codex event/message, cumulative token totals, and the latest rate-limit payload.
 
 ## Validation
 

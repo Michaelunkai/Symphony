@@ -123,13 +123,19 @@ class JsonRpcClient {
 
   request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
     const id = this.nextId++;
-    this.send({ id, method, params });
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`app-server read timeout for ${method}`));
       }, this.readTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
+      try {
+        this.send({ id, method, params });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 

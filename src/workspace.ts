@@ -43,7 +43,10 @@ async function runHook(script: string, cwd: string, timeoutMs: number): Promise<
 }
 
 export class WorkspaceManager {
-  constructor(private readonly config: Pick<ServiceConfig, "workspace" | "hooks">) {}
+  constructor(
+    private readonly config: Pick<ServiceConfig, "workspace" | "hooks">,
+    private readonly onHookFailure?: (phase: "after_run" | "before_remove", error: Error, workspacePath: string) => void,
+  ) {}
 
   async ensure(issue: Issue): Promise<Workspace> {
     const destination = safeWorkspacePath(this.config.workspace.root, issue.identifier);
@@ -61,8 +64,8 @@ export class WorkspaceManager {
     if (!this.config.hooks.afterRun) return;
     try {
       await runHook(this.config.hooks.afterRun, workspace.path, this.config.hooks.timeoutMs);
-    } catch {
-      // After-run hook failures are intentionally non-fatal.
+    } catch (error) {
+      this.onHookFailure?.("after_run", error instanceof Error ? error : new Error(String(error)), workspace.path);
     }
   }
 
@@ -73,8 +76,8 @@ export class WorkspaceManager {
     if (this.config.hooks.beforeRemove) {
       try {
         await runHook(this.config.hooks.beforeRemove, destination, this.config.hooks.timeoutMs);
-      } catch {
-        // Cleanup still proceeds after a before-remove hook failure.
+      } catch (error) {
+        this.onHookFailure?.("before_remove", error instanceof Error ? error : new Error(String(error)), destination);
       }
     }
     await rm(destination, { recursive: true, force: true });
