@@ -1,0 +1,31 @@
+{
+  "name": "symphony",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Linear-to-Codex orchestration service",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "WORKFLOW.example.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/main.ts",
+    "once": "tsx src/main.ts --once",
+    "test": "tsx --test test/**/*.test.ts",
+    "check": "npm run build && npm test"
+  },
+  "dependencies": {
+    "liquidjs": "^10.24.0",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}
